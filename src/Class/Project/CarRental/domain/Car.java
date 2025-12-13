@@ -1,11 +1,12 @@
 package Class.Project.CarRental.domain;
-
+import javax.sql.rowset.serial.SerialBlob;
+import java.io.Serializable;
 import java.util.Objects;
 
-/**
- * Car entity: ID, make, model, rentalPrice.
- */
-public class    Car implements Identifiable<Long> {
+
+    //Car entity: ID, make, model, rentalPrice.
+public class    Car implements Identifiable<Long>, Serializable {
+        private static final long serialVersionUID = 1L;
     private Long id;
     private String make;
     private String model;

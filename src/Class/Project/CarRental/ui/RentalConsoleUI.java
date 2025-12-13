@@ -1,25 +1,26 @@
-
 package Class.Project.CarRental.ui;
 
+import Class.Project.CarRental.config.Settings;
 import Class.Project.CarRental.domain.Car;
 import Class.Project.CarRental.domain.Reservation;
 import Class.Project.CarRental.exception.ValidationException;
-import Class.Project.CarRental.filter.*;
+import Class.Project.CarRental.filter.CarManufacturerFilter;
+import Class.Project.CarRental.filter.CarPriceRangeFilter;
+import Class.Project.CarRental.filter.ReservationCustomerFilter;
+import Class.Project.CarRental.filter.ReservationDateRangeFilter;
 import Class.Project.CarRental.repository.*;
 import Class.Project.CarRental.service.CarService;
 import Class.Project.CarRental.service.ReservationService;
-import Class.Project.CarRental.filter.CarPriceRangeFilter;
-import Class.Project.CarRental.filter.ReservationDateRangeFilter;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
+import java.util.List;
+import java.util.Optional;
+import java.util.Scanner;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongPredicate;
+import java.util.function.Supplier;
 
-import java.time.LocalDate;//A calendar value(year-month-day) that accepts only date values.(Used for Reservations)
-import java.time.format.DateTimeParseException;//Used to catch exceptions when reading invalid dates(Used for Console.Ui read date)
-import java.util.List;//A standard ordered list(Used in Repository to return list of cars/reservations to the UI)
-import java.util.Optional;//A container that may hold a value or be empty,used to avoid returning null.(Used
-import java.util.Scanner;//Parser for text input
-import java.util.concurrent.atomic.AtomicLong;//Used for generating unique Long identifiers for entities.
-import java.util.function.LongPredicate;//Transforms Long into a boolean value.//Used for reservations to check if car exists
-import java.util.function.Supplier;//Functional interface that supplies values on demand.Used InMemoryRepository to obtain a unique id.
 /**
  * Main console UI that allows CRUD operations for Cars and Reservations.
  */
@@ -35,27 +36,71 @@ public class RentalConsoleUI {
     }
 
     public static void main(String[] args) {
-        // id suppliers
+        // 1. Initialize Settings
+        Settings settings = Settings.getInstance();
+        String repositoryType = settings.getRepositoryType(); // "memory", "text", or "binary"
+
+        System.out.println("Starting application using repository type: " + repositoryType);
+
+        // 2. Setup ID Generators (AtomicLong allows us to update the counter later)
         AtomicLong carIdCounter = new AtomicLong(1L);
-        Supplier<Long> longIdSupplier = () -> carIdCounter.getAndIncrement();
         AtomicLong reservationIdCounter = new AtomicLong(1L);
 
-        InMemoryCarRepository carRepository = new InMemoryCarRepository(longIdSupplier);
-        InMemoryRepository<Long, Reservation> reservationRepository = new InMemoryRepository<>(() -> reservationIdCounter.getAndIncrement());
+        Supplier<Long> carIdSupplier = carIdCounter::getAndIncrement;
+        Supplier<Long> reservationIdSupplier = reservationIdCounter::getAndIncrement;
 
-        // Prepopulate cars (five)
-        carRepository.create(new Car("Toyota", "Corolla", 35.00));
-        carRepository.create(new Car("Ford", "Focus", 40.50));
-        carRepository.create(new Car("BMW", "3 Series", 85.00));
-        carRepository.create(new Car("Volkswagen", "Golf", 50.00));
-        carRepository.create(new Car("Renault", "Clio", 32.75));
+        // 3. Instantiate the correct Repositories based on Settings
+        CarRepository carRepository;
+        ReservationRepository reservationRepository;
 
+        switch (repositoryType.toLowerCase()) {
+            case "binary":
+                carRepository = new BinaryCarRepository(carIdSupplier, settings.getCarFile());
+                reservationRepository = new BinaryReservationRepository(reservationIdSupplier, settings.getReservationFile());
+                break;
+            case "text":
+                carRepository = new CarTextRepository(carIdSupplier, settings.getCarFile());
+                reservationRepository = new ReservationTextRepository(reservationIdSupplier, settings.getReservationFile());
+                break;
+            case "memory":
+            default:
+                carRepository = new InMemoryCarRepository(carIdSupplier);
+                reservationRepository = new InMemoryReservationRepository(reservationIdSupplier);
+
+                // If in memory, let's prepopulate some data for testing
+                if (carRepository.findAll().isEmpty()) {
+                    carRepository.create(new Car("Toyota", "Corolla", 35.00));
+                    carRepository.create(new Car("Ford", "Focus", 40.50));
+                    carRepository.create(new Car("BMW", "3 Series", 85.00));
+                    carRepository.create(new Car("Volkswagen", "Golf", 50.00));
+                    carRepository.create(new Car("Renault", "Clio", 32.75));
+                }
+                break;
+        }
+
+        // 4. Synchronize ID Counters
+        // If we loaded data from a file, we must ensure the next ID we generate is higher than the max existing ID.
+        long maxCarId = carRepository.findAll().stream()
+                .mapToLong(Car::getId)
+                .max()
+                .orElse(0L);
+        carIdCounter.set(maxCarId + 1);
+
+        long maxResId = reservationRepository.findAll().stream()
+                .mapToLong(Reservation::getId)
+                .max()
+                .orElse(0L);
+        reservationIdCounter.set(maxResId + 1);
+
+
+        // 5. Initialize Services
         CarService carService = new CarService(carRepository);
 
         // carExistenceChecker uses carService.exists(Long)
-        LongPredicate carExistenceChecker = id -> carService.exists(id);
+        LongPredicate carExistenceChecker = carService::exists;
         ReservationService reservationService = new ReservationService(reservationRepository, carExistenceChecker);
 
+        // 6. Start UI
         RentalConsoleUI ui = new RentalConsoleUI(carService, reservationService);
         ui.runMainMenu();
     }
@@ -132,7 +177,6 @@ public class RentalConsoleUI {
                 System.out.println("Aborted: missing fields.");
                 return;
             }
-            // validate in service? CarService currently only delegates; we validate here before create
             if (dailyRate < 0) throw new ValidationException("Daily rate must be non-negative.");
             Car created = carService.createCar(manufacturer, model, dailyRate);
             System.out.println("Created: " + created);

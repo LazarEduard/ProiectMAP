@@ -1,12 +1,15 @@
 package Class.Project.CarRental.domain;
 
+import java.io.Serializable;
 import java.time.LocalDate;
 import java.util.Objects;
 
 
   //Reservation entity: id, carId, customerName, startDate, endDate.
 
-public class Reservation implements Identifiable<Long> {
+public class Reservation implements Identifiable<Long> , Serializable{
+    private static final long serialVersionUID = 1L;
+
     private Long id;
     private Long carId;
     private String customerName;

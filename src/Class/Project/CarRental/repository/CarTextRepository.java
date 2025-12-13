@@ -3,102 +3,108 @@ package Class.Project.CarRental.repository;
 import Class.Project.CarRental.domain.Car;
 
 import java.io.*;
-import java.util.*;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
-public class CarTextRepository {
+public class CarTextRepository extends InMemoryRepository<Long, Car> implements CarRepository {
 
-    private final Map<Long, Car> storage = new HashMap<>();
-    private long nextId = 1L;
     private final String filePath;
 
-    public CarTextRepository(String filePath) {
+    public CarTextRepository(Supplier<Long> idSupplier, String filePath) {
+        super(idSupplier);
         this.filePath = filePath;
         loadFromFile();
     }
 
     private void loadFromFile() {
         File file = new File(filePath);
-        if (!file.exists()) return;
+        if (!file.exists()) {
+            return;
+        }
+
         try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (line.trim().isEmpty()) continue;
-                String[] parts = line.split("\t", -1);
-                // expect: id, make, model, price
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+                String[] parts = line.split(",", -1);
+                // Format: id,make,model,price
                 long id = Long.parseLong(parts[0]);
-                String make = parts.length > 1 ? parts[1] : "";
-                String model = parts.length > 2 ? parts[2] : "";
-                double price = parts.length > 3 && !parts[3].isEmpty() ? Double.parseDouble(parts[3]) : 0.0;
+                String make = parts[1];
+                String model = parts[2];
+                double price = Double.parseDouble(parts[3]);
+
                 Car car = new Car(id, make, model, price);
-                storage.put(id, car);
-                if (id >= nextId) nextId = id + 1;
+                this.storage.put(id, car);
             }
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to load cars from " + filePath, e);
+        } catch (IOException exception) {
+            throw new RuntimeException("Failed to load cars from file: " + filePath, exception);
         }
     }
 
     private void saveToFile() {
-        File file = new File(filePath);
-        File parent = file.getParentFile();
-        if (parent != null && !parent.exists()) parent.mkdirs();
-
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(file))) {
-            for (Car car : storage.values()) {
-                String line = String.format("%d\t%s\t%s\t%.2f",
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath))) {
+            for (Car car : findAll()) {
+                String line = String.format("%d,%s,%s,%.2f",
                         car.getId(),
-                        safe(car.getMake()),
-                        safe(car.getModel()),
+                        car.getMake(),
+                        car.getModel(),
                         car.getRentalPrice());
                 writer.write(line);
                 writer.newLine();
             }
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to save cars to " + filePath, e);
+        } catch (IOException exception) {
+            throw new RuntimeException("Failed to save cars to file: " + filePath, exception);
         }
     }
 
-    private String safe(String s) {
-        return s == null ? "" : s.replace("\t", " "); // avoid tabs in fields
-    }
-
-
-
-    public synchronized Car create(Car car) {
-        long id = nextId++;
-        car.setId(id);
-        storage.put(id, car);
+    @Override
+    public Car create(Car car) {
+        // Call the parent InMemory logic to add to map
+        Car createdCar = super.create(car);
+        // Persist to file
         saveToFile();
-        return car;
+        return createdCar;
     }
 
-    // returns the Car or null if not found
-    public synchronized Car findById(long id) {
-        return storage.get(id);
-    }
-
-    public synchronized List<Car> findAll() {
-        return new ArrayList<>(storage.values());
-    }
-
-    //throws IllegalArgumentException
-    public synchronized Car update(Car car) {
-        Long id = car.getId();
-        if (id == null || !storage.containsKey(id)) {
-            throw new IllegalArgumentException("Car with id " + id + " not found.");
-        }
-        storage.put(id, car);
+    @Override
+    public Car update(Car car) throws NotFoundException {
+        Car updatedCar = super.update(car);
         saveToFile();
-        return car;
+        return updatedCar;
     }
 
-    public synchronized void deleteById(long id) {
-        if (!storage.containsKey(id)) throw new IllegalArgumentException("Car with id " + id + " not found.");
-        storage.remove(id);
+    @Override
+    public void deleteById(Long id) throws NotFoundException {
+        super.deleteById(id);
         saveToFile();
     }
 
-    public synchronized boolean existsById(long id) {
-        return storage.containsKey(id);
+    // Domain specific queries (Same as InMemoryCarRepository)
+
+    @Override
+    public List<Car> findByManufacturer(String manufacturer) {
+        String normalized = manufacturer == null ? "" : manufacturer.trim();
+        return findAll().stream()
+                .filter(car -> car.getMake() != null && car.getMake().trim().equalsIgnoreCase(normalized))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Car> findByModel(String model) {
+        String normalized = model == null ? "" : model.trim();
+        return findAll().stream()
+                .filter(car -> car.getModel() != null && car.getModel().trim().equalsIgnoreCase(normalized))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Car> findByRentalPriceBelow(double maximumPrice) {
+        return findAll().stream()
+                .filter(car -> car.getRentalPrice() <= maximumPrice)
+                .collect(Collectors.toList());
     }
 }
