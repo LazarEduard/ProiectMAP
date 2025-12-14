@@ -19,7 +19,7 @@ public class CarServiceTest {
     private InMemoryCarRepository carRepository;
 
     @BeforeEach
-    public void setup() {
+      public void setup() {
         // We use a simple counter for IDs in tests
         AtomicLong counter = new AtomicLong(1);
 
