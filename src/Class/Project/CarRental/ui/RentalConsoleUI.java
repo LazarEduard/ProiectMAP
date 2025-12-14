@@ -21,9 +21,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongPredicate;
 import java.util.function.Supplier;
 
-/**
- * Main console UI that allows CRUD operations for Cars and Reservations.
- */
+
+//Main console UI that allows CRUD operations for Cars and Reservations.
+
 public class RentalConsoleUI {
 
     private final CarService carService;
@@ -36,24 +36,29 @@ public class RentalConsoleUI {
     }
 
     public static void main(String[] args) {
-        // 1. Initialize Settings
+        //  Initialize Settings
         Settings settings = Settings.getInstance();
         String repositoryType = settings.getRepositoryType(); // "memory", "text", or "binary"
 
         System.out.println("Starting application using repository type: " + repositoryType);
 
-        // 2. Setup ID Generators (AtomicLong allows us to update the counter later)
+        // Setup ID Generators (AtomicLong allows us to update the counter later)
         AtomicLong carIdCounter = new AtomicLong(1L);
         AtomicLong reservationIdCounter = new AtomicLong(1L);
 
         Supplier<Long> carIdSupplier = carIdCounter::getAndIncrement;
         Supplier<Long> reservationIdSupplier = reservationIdCounter::getAndIncrement;
 
-        // 3. Instantiate the correct Repositories based on Settings
+        // Instantiate the correct Repositories based on Settings
         CarRepository carRepository;
         ReservationRepository reservationRepository;
 
         switch (repositoryType.toLowerCase()) {
+            case "database":
+                // Database repos handle their own IDs via AUTOINCREMENT, so no supplier needed
+                carRepository = new CarDbRepository();
+                reservationRepository = new ReservationDbRepository();
+                break;
             case "binary":
                 carRepository = new BinaryCarRepository(carIdSupplier, settings.getCarFile());
                 reservationRepository = new BinaryReservationRepository(reservationIdSupplier, settings.getReservationFile());
@@ -67,7 +72,7 @@ public class RentalConsoleUI {
                 carRepository = new InMemoryCarRepository(carIdSupplier);
                 reservationRepository = new InMemoryReservationRepository(reservationIdSupplier);
 
-                // If in memory, let's prepopulate some data for testing
+
                 if (carRepository.findAll().isEmpty()) {
                     carRepository.create(new Car("Toyota", "Corolla", 35.00));
                     carRepository.create(new Car("Ford", "Focus", 40.50));
@@ -78,8 +83,7 @@ public class RentalConsoleUI {
                 break;
         }
 
-        // 4. Synchronize ID Counters
-        // If we loaded data from a file, we must ensure the next ID we generate is higher than the max existing ID.
+        //  Synchronize ID Counters
         long maxCarId = carRepository.findAll().stream()
                 .mapToLong(Car::getId)
                 .max()
@@ -93,14 +97,13 @@ public class RentalConsoleUI {
         reservationIdCounter.set(maxResId + 1);
 
 
-        // 5. Initialize Services
+        // Initialize Services
         CarService carService = new CarService(carRepository);
 
         // carExistenceChecker uses carService.exists(Long)
         LongPredicate carExistenceChecker = carService::exists;
         ReservationService reservationService = new ReservationService(reservationRepository, carExistenceChecker);
 
-        // 6. Start UI
         RentalConsoleUI ui = new RentalConsoleUI(carService, reservationService);
         ui.runMainMenu();
     }
@@ -111,19 +114,21 @@ public class RentalConsoleUI {
             System.out.println("\n=== Car Rental Manager ===");
             System.out.println("1) Manage Cars");
             System.out.println("2) Manage Reservations");
-            System.out.println("3) Exit");
+            System.out.println("3) Reports");
+            System.out.println("4) Exit");
             String choice = prompt("Choice");
             switch (choice) {
                 case "1": runCarMenu(); break;
                 case "2": runReservationMenu(); break;
-                case "3": running = false; break;
+                case "3": runReportsMenu(); break;
+                case "4": running = false; break;
                 default: System.out.println("Unknown choice."); break;
             }
         }
         System.out.println("Goodbye!");
     }
 
-    // ------------ Car menu --------------
+    //Car menu
     private void runCarMenu() {
         boolean inCarMenu = true;
         while (inCarMenu) {
@@ -248,7 +253,7 @@ public class RentalConsoleUI {
     }
 
 
-    // ------------ Reservation menu -------------
+    // Reservation menu
     private void runReservationMenu() {
         boolean inReservationMenu = true;
         while (inReservationMenu) {
@@ -366,8 +371,117 @@ public class RentalConsoleUI {
             System.out.println("Invalid date range: " + e.getMessage());
         }
     }
+    //Reports Menu
+    private void runReportsMenu() {
+        boolean inReports = true;
+        while (inReports) {
+            System.out.println("\nReports");
+            System.out.println("1) Report: Cars rented by specific customer");
+            System.out.println("2) Report: Total income from a specific car");
+            System.out.println("3) Report: Most popular car model");
+            System.out.println("4) Report: Daily revenue sorted by date");
+            System.out.println("5) Report: Available cars (currently not rented)");
+            System.out.println("6) Back");
+            String choice = prompt("Choice");
+            switch (choice) {
+                case "1": reportCarsByCustomer(); break;
+                case "2": reportTotalIncomeByCar(); break;
+                case "3": reportMostPopularCar(); break;
+                case "4": reportDailyRevenue(); break;
+                case "5": reportAvailableCars(); break;
+                case "6": inReports = false; break;
+                default: System.out.println("Unknown choice."); break;
+            }
+        }
+    }
 
-    // ----------------- Helpers -----------------
+    //All cars rented by a specific customer
+    //Filter reservations by name,map to Car ID , map to Car object,collect list
+    private void reportCarsByCustomer() {
+        String customerName = prompt("Enter customer name");
+        System.out.println("Cars rented by " + customerName + ":");
+
+        reservationService.listAllReservations().stream()
+                .filter(r -> r.getCustomerName().equalsIgnoreCase(customerName))
+                .map(r -> carService.getById(r.getCarId())) // Get Optional<Car>
+                .filter(Optional::isPresent)                // Keep only found cars
+                .map(Optional::get)
+                .distinct()                                 // Remove duplicates
+                .forEach(car -> System.out.println(" - " + car));
+    }
+
+    //Total income from a specific car
+    //Filter reservations for car,calculate days * price =sum
+    private void reportTotalIncomeByCar() {
+        Long carId = readLong("Enter Car ID");
+        if (carId == null) return;
+
+        Optional<Car> maybeCar = carService.getById(carId);
+        if (maybeCar.isEmpty()) {
+            System.out.println("Car not found.");
+            return;
+        }
+        Car car = maybeCar.get();
+
+        double totalIncome = reservationService.listAllReservations().stream()
+                .filter(r -> r.getCarId().equals(carId))
+                .mapToDouble(r -> {
+                    long days = java.time.temporal.ChronoUnit.DAYS.between(r.getStartDate(), r.getEndDate());
+                    // start=end, count as 1 day
+                    if (days == 0) days = 1;
+                    return days * car.getRentalPrice();
+                })
+                .sum();
+
+        System.out.printf("Total income for %s %s: %.2f\n", car.getMake(), car.getModel(), totalIncome);
+    }
+
+    // Most popular car model
+    // Group reservations by Car ID -> Count -> Sort -> Find First
+    private void reportMostPopularCar() {
+        var mostPopular = reservationService.listAllReservations().stream()
+                .collect(java.util.stream.Collectors.groupingBy(Reservation::getCarId, java.util.stream.Collectors.counting()))
+                .entrySet().stream()
+                .max(java.util.Map.Entry.comparingByValue()); // Find max count
+
+        if (mostPopular.isPresent()) {
+            Long carId = mostPopular.get().getKey();
+            Long count = mostPopular.get().getValue();
+            Optional<Car> car = carService.getById(carId);
+            System.out.println("Most popular car: " + car.map(Object::toString).orElse("Unknown ID " + carId)
+                    + " with " + count + " reservations.");
+        } else {
+            System.out.println("No reservations found.");
+        }
+    }
+
+    //Daily revenue =list reservations sorted by start date
+    private void reportDailyRevenue() {
+        System.out.println("Reservations sorted by start date:");
+        reservationService.listAllReservations().stream()
+                .sorted(java.util.Comparator.comparing(Reservation::getStartDate))
+                .forEach(r -> System.out.println(" - " + r.getStartDate() + ": " + r.getCustomerName()));
+    }
+
+    //  Cars currently available
+    private void reportAvailableCars() {
+        LocalDate today = LocalDate.now();
+        System.out.println("Cars available for rent today (" + today + "):");
+
+        //Find IDs of cars that are currently busy
+        List<Long> busyCarIds = reservationService.listAllReservations().stream()
+                .filter(r -> !today.isBefore(r.getStartDate()) && !today.isAfter(r.getEndDate()))
+                .map(Reservation::getCarId)
+                .toList();
+
+        // Filter all cars excluding the busy ones
+        carService.listAll().stream()
+                .filter(car -> !busyCarIds.contains(car.getId()))
+                .forEach(car -> System.out.println(" - " + car));
+    }
+
+
+    //Helpers
 
     private String prompt(String message) {
         System.out.print(message + ": ");
